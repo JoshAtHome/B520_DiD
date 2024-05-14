@@ -4,6 +4,10 @@ library(fixest)
 library(did)
 options(scipen = 999)
 
+wd <- '/Users/josh/Documents/Laptop/SS24/AdvancedTopics/codes2'
+setwd(wd)
+
+
 T = 7
 N = 20
 shock <- T
@@ -14,7 +18,9 @@ sim_data = function(heterogeneity, violation){
   trend <- cumsum(normal_random)
   ##############################################################################
   dat$effect <- 1
-  if (heterogeneity!=0){dat$effect <- rep(rnorm(N, mean = 1, sd = heterogeneity*0.1), each = T)} # heterogeneity across units
+  if (heterogeneity!=0){dat$effect <- rep(rnorm(N, mean = heterogeneity, sd = 1), each = T)} # heterogeneity across units
+ # if (heterogeneity!=0){dat$effect <- rep(rnorm(N, mean = 1, sd = heterogeneity*0.1), each = T)} # heterogeneity across units
+  
   if (heterogeneity!=0){dat$effect <- rep(rgamma(N, shape = heterogeneity, rate = 1), each = T)}
   dat <- mutate(dat, group = ifelse(i > N/2,"treat","control"), G = shock*(group == "treat"),
                 treat = 1L*(group == "treat"), control = 1L*(group == "control"),  current = 1L*(G == t),
@@ -28,7 +34,7 @@ sim_data = function(heterogeneity, violation){
                   post * external_shock * violation + rnorm(N*T, mean = 0, sd = 0.001) ,
                 #################################################################
                 X1 = tre + post * treat * violation + rnorm(N*T, mean = 0, sd = 0.2))
-  print(cor(dat$external_shock, dat$y))
+#  print(cor(dat$external_shock, dat$y))
   dat
 }
 
@@ -45,13 +51,6 @@ att2 <- aggte(att_gt(yname = "y", tname = "t", idname = "i", gname = "G", xforml
 abs(att1 - mean(dat1$effect[dat1$current == 1]))
 abs(att2 - mean(dat2$effect[dat2$current == 1]))
 
-aggte(att_gt(yname = "y", tname = "t", idname = "i", gname = "G", xformla = ~1, data = dat1, panel=TRUE))
-aggte(att_gt(yname = "y", tname = "t", idname = "i", gname = "G", xformla = ~1, data = dat2, panel=TRUE))
-
-
-
-
-
 ##############################################################################
 a <- att_gt(yname = "y", tname = "t", idname = "i", gname = "G", xformla = ~1, data = dat1, panel=TRUE)
 ggdid(a)
@@ -59,11 +58,11 @@ a
 
 get_descriptive = function(data, treat){
   treated_outcomes <-data$y[data$treat == treat & data$t==T]
-  mean_outcome <- mean(treated_outcomes)
-  lb <- t.test(treated_outcomes)$conf.int[1]
-  ub <- t.test(treated_outcomes)$conf.int[2]
-  sd <- sd(treated_outcomes)
-  all <- c(mean_outcome, lb, ub, sd)
+  M <- mean(treated_outcomes)
+  SD <- sd(treated_outcomes)
+  lower <- t.test(treated_outcomes)$conf.int[1]
+  upper <- t.test(treated_outcomes)$conf.int[2]
+  all <- c(M, SD, lower, upper)
   return(all)
 }
 
@@ -83,6 +82,7 @@ att_estimate <- function(heterogeneity, violation){
   act <- mean(dat$effect[dat$treat == 1])
   return(list(est=est, est_cond=est_cond, act=act, se=se, descr0=descr0, descr1=descr1))
 }
+
 
 repl <- function(vec){
   imp <- vec  
@@ -118,7 +118,7 @@ sim <- function(amount, heterogeneity, violation) {
   
   return(list(bias=bias, bias_cond=bias_cond, se=se, descr0_means=descr0_means, descr1_means=descr1_means)) }
 
-sim(1,10,1)$bias
+sim(1,10,2)
 
 bias_hom <- function(n,viol) {
   result <- sim(n,1,viol)
@@ -141,26 +141,33 @@ bias_table <- function(n) {
   biases <- matrix(data=NA, nrow = 5, ncol = 5)
   biases_cond <- matrix(data=NA, nrow = 5, ncol = 5)
   standard_errors <- matrix(data=NA, nrow = 5, ncol = 5)
+  desc0 <- matrix(data=NA, nrow = n^2, ncol = 4)
+  desc1 <- matrix(data=NA, nrow = n^2, ncol = 4)
+  ### create desc0 and desc1 for all combinations. Het 0 vio 0, Het 0 vio 1, Het 0 vio 2
+  # all 25. 
+  # if het i==0 and j==0 desc0
+  counter <- 1
   for (i in 0:4){
     for (j in 0:4){
       result <- sim(n,i,j)
-      if (i==0 && j==0){
-        desc0 <- result$descr0_means
-        desc1 <- result$descr1_means
-        desc <- rbind(desc0, desc1)
-      }
+      desc0[counter,] <- result$descr0_means
+      desc1[counter,] <- result$descr1_means
       biases[i+1,j+1] <- result$bias
       biases_cond[i+1,j+1] <- result$bias_cond
       standard_errors[i+1,j+1] <- result$se
+      counter <- counter + 1
     }
   }
   mean_se <- colMeans(standard_errors, na.rm = TRUE)
   mean_bias <- rowMeans(biases, na.rm = TRUE)
+  desc0 <- colMeans(desc0, na.rm = TRUE)
+  desc1 <- colMeans(desc1, na.rm = TRUE)
+  desc <- rbind(desc0,desc1)
   return(list(biases=biases,biases_cond=biases_cond, mean_bias=mean_bias, mean_se=mean_se, desc=desc))
 }
 
 desc_df <- function(desc) {
-  desc_df <- data.frame(group =  c('Untreated', 'Treated'), outcome = desc[, 1], lb = desc[, 2], ub = desc[, 3], se = desc[, 4])
+  desc_df <- data.frame(group =  c('Untreated', 'Treated'), M = desc[, 1], SE = desc[, 2], lower = desc[, 3], upper = desc[, 4])
   rownames(desc_df) <- NULL
   return(desc_df)
 }
@@ -184,31 +191,45 @@ plot_heatmap <- function(mat, title) {
     scale_fill_gradient(low = "green", high = "red", name = "Bias") +
     labs(x = "Violation", y = "Heterogeneity", title = 'Unconditional Biases') +
     theme_minimal() +
-    theme(plot.title = element_text(hjust = 0.5, vjust=-2, size=20),
+    theme(plot.title = element_text(hjust = 0.5, size=18),
         axis.text.x = element_text(size = 12),
         axis.text.y = element_text(size = 12),
         axis.title = element_text(size = 15),
         legend.text = element_text(size = 12),
         legend.title = element_text(size = 15),
-        aspect.ratio = 1)
-  print(map)
+        aspect.ratio = 1) + 
+     theme(panel.background = element_blank())
+  return(map)
 }
 
-####################
-data <- bias_table(5)
-####################
 
+
+############################################################
+data <- bias_table(5)
+############################################################
 biases <- data$biases
 biases_cond <- data$biases_cond
 mean_se <- data$mean_se
 mean_bias <- data$mean_bias
 descriptive_hom_noviol <- data$desc
+############################################################
 
 
+library(xtable)
 # Data
-desc_df(descriptive_hom_noviol) # shows descriptive statistics of homogeneous effects with no violation
+tab1 <-desc_df(descriptive_hom_noviol) # shows descriptive statistics of homogeneous effects with no violation
+tab1
+
 # Results
-plot_se(mean_bias, mean_se) # shows that heterogeneity does not increase bias, but does increase standard error
-plot_heatmap(biases, 'Conditional Biases') # shows that heterogneity does not increase bias
+tab2 <- plot_se(mean_bias, mean_se) # shows that heterogeneity does not increase bias, but does increase standard error
+tab2
+
+figure1 <- plot_heatmap(biases, 'Conditional Biases') # shows that heterogneity does not increase bias
+figure1
+
+ggsave("figure1.png", plot = figure1, width = 4, height = 4, units = "in", bg='#ffffff')
+
+print(xtable(tab1), type = "latex")
+print(xtable(tab2), type = "latex")
 
 
